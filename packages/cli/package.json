@@ -1,0 +1,36 @@
+{
+  "name": "@openwebrx-js/cli",
+  "version": "0.1.0",
+  "description": "OpenWebRX+ interactive CLI client with audio playback",
+  "main": "dist/index.js",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/boybook/openwebrx-js.git",
+    "directory": "packages/cli"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "dist"
+  ],
+  "bin": {
+    "openwebrx-cli": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "ts-node src/index.ts"
+  },
+  "dependencies": {
+    "@openwebrx-js/api": "*",
+    "audify": "^1.8.0",
+    "speex-resampler": "^3.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "ts-node": "^10.9.0",
+    "typescript": "^5.3.0"
+  }
+}
