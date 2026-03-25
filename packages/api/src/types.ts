@@ -76,4 +76,5 @@ export type ClientEventMap = {
   metadata: [data: Record<string, unknown>];
   secondaryDemod: [data: Record<string, unknown>];
   backoff: [reason: string];
+  clients: [count: number];
 };

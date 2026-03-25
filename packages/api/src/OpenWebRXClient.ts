@@ -30,6 +30,7 @@ export class OpenWebRXClient extends EventEmitter {
   private url: string;
   private serverVersion = "";
   private dspStarted = false;
+  private clientCount = 0;
   private pendingProfileSwitch = false;
   private audioBuffer: AudioBuffer;
   private hdAudioBuffer: AudioBuffer;
@@ -181,6 +182,10 @@ export class OpenWebRXClient extends EventEmitter {
     return this.outputRate;
   }
 
+  getClientCount(): number {
+    return this.clientCount;
+  }
+
   // --- Internal ---
 
   private sendConnectionProperties(): void {
@@ -281,6 +286,11 @@ export class OpenWebRXClient extends EventEmitter {
 
       case "demodulator_error":
         this.emit("error", new Error(`Demodulator error: ${value}`));
+        break;
+
+      case "clients":
+        this.clientCount = value as number;
+        this.emit("clients", this.clientCount);
         break;
 
       case "backoff":
