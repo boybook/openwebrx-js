@@ -352,11 +352,11 @@ export class OpenWebRXClient extends EventEmitter {
       );
       pcm = decoder.decodeWithSync(uint8);
     } else {
-      pcm = new Int16Array(
-        payload.buffer,
+      const aligned = payload.buffer.slice(
         payload.byteOffset,
-        payload.length / 2
+        payload.byteOffset + payload.length
       );
+      pcm = new Int16Array(aligned);
     }
 
     if (pcm.length > 0) {
