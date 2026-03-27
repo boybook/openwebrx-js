@@ -34,6 +34,8 @@ export class OpenWebRXClient extends EventEmitter {
   private pendingProfileSwitch = false;
   private audioBuffer: AudioBuffer;
   private hdAudioBuffer: AudioBuffer;
+  /** DSP params explicitly set by the user; persisted across profile switches. */
+  private userDspParams: DspParams = {};
 
   constructor(options: ConnectionOptions) {
     super();
@@ -128,7 +130,14 @@ export class OpenWebRXClient extends EventEmitter {
   }
 
   setDspParams(params: DspParams): void {
+    // Accumulate user-set params so they survive profile switches.
+    Object.assign(this.userDspParams, params);
     this.sendJson({ type: "dspcontrol", params });
+  }
+
+  /** Clear all user-set DSP overrides (e.g. after manually selecting a new profile). */
+  resetDspParams(): void {
+    this.userDspParams = {};
   }
 
   setFrequency(absoluteHz: number): void {
@@ -233,16 +242,21 @@ export class OpenWebRXClient extends EventEmitter {
           this.audioBuffer.clear();
           this.hdAudioBuffer.clear();
 
-          const initParams: DspParams = {};
-          if (incoming.start_mod) initParams.mod = incoming.start_mod;
+          // Profile defaults (lowest priority)
+          const profileParams: DspParams = {};
+          if (incoming.start_mod) profileParams.mod = incoming.start_mod;
           if (incoming.start_offset_freq !== undefined)
-            initParams.offset_freq = incoming.start_offset_freq;
+            profileParams.offset_freq = incoming.start_offset_freq;
           if (incoming.initial_squelch_level !== undefined)
-            initParams.squelch_level = incoming.initial_squelch_level;
+            profileParams.squelch_level = incoming.initial_squelch_level;
+
+          // User-set params override profile defaults (highest priority)
+          const mergedParams: DspParams = { ...profileParams, ...this.userDspParams };
 
           this.startDsp();
-          if (Object.keys(initParams).length > 0) {
-            this.setDspParams(initParams);
+          if (Object.keys(mergedParams).length > 0) {
+            // Send directly — these are not new user choices, don't update userDspParams
+            this.sendJson({ type: "dspcontrol", params: mergedParams });
           }
         }
 
