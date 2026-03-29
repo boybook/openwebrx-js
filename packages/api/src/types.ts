@@ -61,6 +61,12 @@ export interface DspParams {
   dmr_filter?: number;
 }
 
+export interface SecondaryDspConfig {
+  secondary_fft_size?: number;
+  if_samp_rate?: number;
+  [key: string]: unknown;
+}
+
 export interface OpenWebRXSpectrumFrame {
   bins: Float32Array;
   fftSize: number | null;
@@ -68,6 +74,15 @@ export interface OpenWebRXSpectrumFrame {
   sampleRate: number | null;
   compression: "adpcm" | "none";
   timestamp: number;
+  isSecondary?: boolean;
+  secondaryMode?: string | false | null;
+  secondaryOffsetFreq?: number | null;
+  tunedFrequency?: number | null;
+  ifSampleRate?: number | null;
+  lowCut?: number | null;
+  highCut?: number | null;
+  absoluteRange?: { min: number; max: number } | null;
+  rawBinCount?: number;
 }
 
 export type ClientEventMap = {
@@ -81,6 +96,7 @@ export type ClientEventMap = {
   hdAudio: [pcmData: Int16Array];
   fft: [frame: OpenWebRXSpectrumFrame];
   secondaryFft: [frame: OpenWebRXSpectrumFrame];
+  secondaryConfig: [config: SecondaryDspConfig];
   receiverDetails: [details: ReceiverDetails];
   log: [message: string];
   error: [error: Error];

@@ -14,6 +14,7 @@ Features:
 - WebSocket connection with automatic handshake
 - Real-time audio stream (PCM Int16) via events or ring buffer
 - Real-time FFT spectrum stream from the main receiver and secondary waterfall
+- Explicit FT8/FT4 secondary demodulator control for fine spectrum
 - ADPCM decoding (ported from the OpenWebRX+ frontend)
 - Full receiver control: frequency tuning, modulation, profile switching, squelch, bandpass
 - Automatic DSP restart on profile/SDR device changes
@@ -76,11 +77,17 @@ client.on("fft", (frame) => {
   console.log(frame.centerFreq, frame.sampleRate, frame.bins.length);
 });
 
+// Listen for FT8/FT4 fine spectrum rows from the secondary demodulator
+client.on("secondaryFft", (frame) => {
+  console.log(frame.secondaryMode, frame.absoluteRange, frame.bins.length);
+});
+
 // Control the receiver
 client.selectProfile("sdr_id|profile_id");
 client.setFrequency(14074000);
 client.setModulation("usb");
 client.setSquelch(-80);
+client.enableDigitalDetailSpectrum({ mode: "ft8", offsetHz: 1500 });
 
 // Or use the ring buffer for pull-based access
 const buffer = client.getAudioBuffer();
@@ -108,6 +115,7 @@ const samples = buffer.read(1024); // read up to 1024 samples
 - **Profile switching is manual.** The server does not auto-select profiles based on frequency. You must switch to the appropriate profile first, then tune.
 - **Audio buffer strategy:** Max 1 second buffer. When the buffer is full, oldest samples are dropped to keep latency bounded (same strategy as the OpenWebRX+ web frontend).
 - **Bot detection:** The server tracks rapid profile changes. Avoid switching profiles faster than once every few seconds.
+- **WSJT fine spectrum:** FT8/FT4 detail spectrum is enabled by sending `secondary_mod` and `secondary_offset_freq`. Use `enableDigitalDetailSpectrum()` / `disableDigitalDetailSpectrum()` and subscribe to `secondaryConfig` plus `secondaryFft`.
 
 ## Requirements
 

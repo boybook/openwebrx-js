@@ -16,6 +16,7 @@ import type {
   Mode,
   DspParams,
   OpenWebRXSpectrumFrame,
+  SecondaryDspConfig,
 } from "./types";
 
 const COMPRESS_FFT_PAD_N = 10;
@@ -39,6 +40,7 @@ export class OpenWebRXClient extends EventEmitter {
   private pendingProfileSwitch = false;
   private audioBuffer: AudioBuffer;
   private hdAudioBuffer: AudioBuffer;
+  private secondaryConfig: SecondaryDspConfig = {};
   /** DSP params explicitly set by the user; persisted across profile switches. */
   private userDspParams: DspParams = {};
 
@@ -165,6 +167,25 @@ export class OpenWebRXClient extends EventEmitter {
     this.setDspParams({ low_cut: lowCut, high_cut: highCut });
   }
 
+  setSecondaryDemod(mod: string | false): void {
+    this.setDspParams({ secondary_mod: mod });
+  }
+
+  setSecondaryOffsetFrequency(offsetHz: number): void {
+    this.setDspParams({ secondary_offset_freq: offsetHz });
+  }
+
+  enableDigitalDetailSpectrum(options: { mode: "ft8" | "ft4"; offsetHz: number }): void {
+    this.setDspParams({
+      secondary_mod: options.mode,
+      secondary_offset_freq: options.offsetHz,
+    });
+  }
+
+  disableDigitalDetailSpectrum(): void {
+    this.setDspParams({ secondary_mod: false });
+  }
+
   selectProfile(profileId: string): void {
     this.pendingProfileSwitch = true;
     this.sendJson({ type: "selectprofile", params: { profile: profileId } });
@@ -180,6 +201,10 @@ export class OpenWebRXClient extends EventEmitter {
 
   getConfig(): ServerConfig {
     return { ...this.config };
+  }
+
+  getSecondaryConfig(): SecondaryDspConfig {
+    return { ...this.secondaryConfig };
   }
 
   getOutputRate(): number {
@@ -284,6 +309,14 @@ export class OpenWebRXClient extends EventEmitter {
         this.emit("secondaryDemod", value);
         break;
 
+      case "secondary_config":
+        this.secondaryConfig = {
+          ...this.secondaryConfig,
+          ...(value as SecondaryDspConfig),
+        };
+        this.emit("secondaryConfig", { ...this.secondaryConfig });
+        break;
+
       case "log_message":
         this.emit("log", value as string);
         break;
@@ -358,19 +391,127 @@ export class OpenWebRXClient extends EventEmitter {
   }
 
   private handleSpectrum(payload: Buffer, event: "fft" | "secondaryFft"): void {
-    const bins = this.decodeSpectrum(payload);
-    if (!bins || bins.length === 0) return;
+    const decodedBins = this.decodeSpectrum(payload);
+    if (!decodedBins || decodedBins.length === 0) return;
 
-    const frame: OpenWebRXSpectrumFrame = {
+    const frame = event === "secondaryFft"
+      ? this.buildSecondarySpectrumFrame(decodedBins)
+      : this.buildPrimarySpectrumFrame(decodedBins);
+
+    this.emit(event, frame);
+  }
+
+  private buildPrimarySpectrumFrame(bins: Float32Array): OpenWebRXSpectrumFrame {
+    return {
       bins,
       fftSize: this.config.fft_size ?? bins.length,
       centerFreq: this.config.center_freq ?? null,
       sampleRate: this.config.samp_rate ?? null,
       compression: this.fftCompression,
       timestamp: Date.now(),
+      isSecondary: false,
+      tunedFrequency: this.getCurrentTunedFrequency(),
+      rawBinCount: bins.length,
+      absoluteRange: this.getPrimaryAbsoluteRange(),
     };
+  }
 
-    this.emit(event, frame);
+  private buildSecondarySpectrumFrame(decodedBins: Float32Array): OpenWebRXSpectrumFrame {
+    const rawBinCount = decodedBins.length;
+    const tunedFrequency = this.getCurrentTunedFrequency();
+    const secondaryMode = this.userDspParams.secondary_mod ?? null;
+    const secondaryOffsetFreq = this.userDspParams.secondary_offset_freq ?? null;
+    const lowCut = typeof this.userDspParams.low_cut === "number" ? this.userDspParams.low_cut : null;
+    const highCut = typeof this.userDspParams.high_cut === "number" ? this.userDspParams.high_cut : null;
+    const ifSampleRate = typeof this.secondaryConfig.if_samp_rate === "number" ? this.secondaryConfig.if_samp_rate : null;
+
+    let bins = decodedBins;
+    let centerFreq = tunedFrequency;
+    let sampleRate = ifSampleRate;
+    let absoluteRange: { min: number; max: number } | null = null;
+
+    if (
+      tunedFrequency !== null &&
+      ifSampleRate !== null &&
+      lowCut !== null &&
+      highCut !== null &&
+      highCut > lowCut
+    ) {
+      const visibleBins = this.cropSecondarySpectrum(decodedBins, ifSampleRate, lowCut, highCut);
+      bins = visibleBins.length > 0 ? visibleBins : decodedBins;
+      centerFreq = tunedFrequency + (lowCut + highCut) / 2;
+      sampleRate = highCut - lowCut;
+      absoluteRange = {
+        min: tunedFrequency + lowCut,
+        max: tunedFrequency + highCut,
+      };
+    }
+
+    return {
+      bins,
+      fftSize: this.secondaryConfig.secondary_fft_size ?? bins.length,
+      centerFreq,
+      sampleRate,
+      compression: this.fftCompression,
+      timestamp: Date.now(),
+      isSecondary: true,
+      secondaryMode,
+      secondaryOffsetFreq,
+      tunedFrequency,
+      ifSampleRate,
+      lowCut,
+      highCut,
+      absoluteRange,
+      rawBinCount,
+    };
+  }
+
+  private cropSecondarySpectrum(
+    decodedBins: Float32Array,
+    ifSampleRate: number,
+    lowCut: number,
+    highCut: number,
+  ): Float32Array {
+    if (decodedBins.length === 0 || ifSampleRate <= 0) {
+      return decodedBins;
+    }
+
+    const halfSpan = ifSampleRate / 2;
+    const startRatio = (lowCut + halfSpan) / ifSampleRate;
+    const endRatio = (highCut + halfSpan) / ifSampleRate;
+    const startIndex = Math.max(0, Math.floor(startRatio * decodedBins.length));
+    const endIndex = Math.min(decodedBins.length, Math.ceil(endRatio * decodedBins.length));
+
+    if (endIndex <= startIndex) {
+      return new Float32Array(0);
+    }
+
+    return decodedBins.slice(startIndex, endIndex);
+  }
+
+  private getCurrentTunedFrequency(): number | null {
+    const centerFreq = this.config.center_freq;
+    const offsetFreq = this.userDspParams.offset_freq ?? this.config.start_offset_freq;
+
+    if (typeof centerFreq !== "number" || typeof offsetFreq !== "number") {
+      return null;
+    }
+
+    return centerFreq + offsetFreq;
+  }
+
+  private getPrimaryAbsoluteRange(): { min: number; max: number } | null {
+    const centerFreq = this.config.center_freq;
+    const sampleRate = this.config.samp_rate;
+
+    if (typeof centerFreq !== "number" || typeof sampleRate !== "number") {
+      return null;
+    }
+
+    return {
+      min: centerFreq - sampleRate / 2,
+      max: centerFreq + sampleRate / 2,
+    };
   }
 
   private decodeSpectrum(payload: Buffer): Float32Array | null {
