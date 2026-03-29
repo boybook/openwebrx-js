@@ -13,6 +13,7 @@ Pure TypeScript API client library with **zero native dependencies** (only `ws`)
 Features:
 - WebSocket connection with automatic handshake
 - Real-time audio stream (PCM Int16) via events or ring buffer
+- Real-time FFT spectrum stream from the main receiver and secondary waterfall
 - ADPCM decoding (ported from the OpenWebRX+ frontend)
 - Full receiver control: frequency tuning, modulation, profile switching, squelch, bandpass
 - Automatic DSP restart on profile/SDR device changes
@@ -68,6 +69,11 @@ client.startDsp();
 // Listen for decoded audio (mono Int16 PCM at 12kHz)
 client.on("audio", (pcm: Int16Array) => {
   // Process audio data...
+});
+
+// Listen for full FFT waterfall rows
+client.on("fft", (frame) => {
+  console.log(frame.centerFreq, frame.sampleRate, frame.bins.length);
 });
 
 // Control the receiver

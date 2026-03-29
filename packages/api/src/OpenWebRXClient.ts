@@ -15,7 +15,10 @@ import type {
   Profile,
   Mode,
   DspParams,
+  OpenWebRXSpectrumFrame,
 } from "./types";
+
+const COMPRESS_FFT_PAD_N = 10;
 
 export class OpenWebRXClient extends EventEmitter {
   private ws: WebSocket | null = null;
@@ -24,7 +27,9 @@ export class OpenWebRXClient extends EventEmitter {
   private modes: Mode[] = [];
   private adpcmAudioDecoder = new AdpcmDecoder();
   private adpcmHdDecoder = new AdpcmDecoder();
+  private adpcmFftDecoder = new AdpcmDecoder();
   private audioCompression: "adpcm" | "none" = "adpcm";
+  private fftCompression: "adpcm" | "none" = "none";
   private outputRate: number;
   private hdOutputRate: number;
   private url: string;
@@ -110,19 +115,13 @@ export class OpenWebRXClient extends EventEmitter {
     return this.serverVersion;
   }
 
-  // --- Audio Buffer Access ---
-
-  /** Get the audio ring buffer for reading decoded PCM samples. */
   getAudioBuffer(): AudioBuffer {
     return this.audioBuffer;
   }
 
-  /** Get the HD audio ring buffer for reading decoded PCM samples. */
   getHdAudioBuffer(): AudioBuffer {
     return this.hdAudioBuffer;
   }
-
-  // --- DSP Control ---
 
   startDsp(): void {
     this.sendJson({ type: "dspcontrol", action: "start" });
@@ -130,12 +129,10 @@ export class OpenWebRXClient extends EventEmitter {
   }
 
   setDspParams(params: DspParams): void {
-    // Accumulate user-set params so they survive profile switches.
     Object.assign(this.userDspParams, params);
     this.sendJson({ type: "dspcontrol", params });
   }
 
-  /** Clear all user-set DSP overrides (e.g. after manually selecting a new profile). */
   resetDspParams(): void {
     this.userDspParams = {};
   }
@@ -168,8 +165,6 @@ export class OpenWebRXClient extends EventEmitter {
     this.setDspParams({ low_cut: lowCut, high_cut: highCut });
   }
 
-  // --- Profile Control ---
-
   selectProfile(profileId: string): void {
     this.pendingProfileSwitch = true;
     this.sendJson({ type: "selectprofile", params: { profile: profileId } });
@@ -194,8 +189,6 @@ export class OpenWebRXClient extends EventEmitter {
   getClientCount(): number {
     return this.clientCount;
   }
-
-  // --- Internal ---
 
   private sendConnectionProperties(): void {
     this.sendJson({
@@ -230,32 +223,33 @@ export class OpenWebRXClient extends EventEmitter {
         Object.assign(this.config, incoming);
 
         if (incoming.audio_compression !== undefined) {
-          this.audioCompression = incoming.audio_compression as
-            | "adpcm"
-            | "none";
+          this.audioCompression = incoming.audio_compression as "adpcm" | "none";
+        }
+        if (incoming.fft_compression !== undefined) {
+          this.fftCompression = incoming.fft_compression as "adpcm" | "none";
         }
 
         if (this.pendingProfileSwitch && this.dspStarted) {
           this.pendingProfileSwitch = false;
           this.adpcmAudioDecoder.reset();
           this.adpcmHdDecoder.reset();
+          this.adpcmFftDecoder.reset();
           this.audioBuffer.clear();
           this.hdAudioBuffer.clear();
 
-          // Profile defaults (lowest priority)
           const profileParams: DspParams = {};
           if (incoming.start_mod) profileParams.mod = incoming.start_mod;
-          if (incoming.start_offset_freq !== undefined)
+          if (incoming.start_offset_freq !== undefined) {
             profileParams.offset_freq = incoming.start_offset_freq;
-          if (incoming.initial_squelch_level !== undefined)
+          }
+          if (incoming.initial_squelch_level !== undefined) {
             profileParams.squelch_level = incoming.initial_squelch_level;
+          }
 
-          // User-set params override profile defaults (highest priority)
           const mergedParams: DspParams = { ...profileParams, ...this.userDspParams };
 
           this.startDsp();
           if (Object.keys(mergedParams).length > 0) {
-            // Send directly — these are not new user choices, don't update userDspParams
             this.sendJson({ type: "dspcontrol", params: mergedParams });
           }
         }
@@ -308,10 +302,7 @@ export class OpenWebRXClient extends EventEmitter {
         break;
 
       case "backoff":
-        this.emit(
-          "backoff",
-          (msg as Record<string, unknown>).reason as string
-        );
+        this.emit("backoff", (msg as Record<string, unknown>).reason as string);
         break;
 
       default:
@@ -327,25 +318,19 @@ export class OpenWebRXClient extends EventEmitter {
 
     switch (opcode) {
       case BinaryOpcode.AUDIO:
-        this.handleAudio(
-          payload,
-          this.adpcmAudioDecoder,
-          this.audioBuffer,
-          "audio"
-        );
+        this.handleAudio(payload, this.adpcmAudioDecoder, this.audioBuffer, "audio");
         break;
 
       case BinaryOpcode.HD_AUDIO:
-        this.handleAudio(
-          payload,
-          this.adpcmHdDecoder,
-          this.hdAudioBuffer,
-          "hdAudio"
-        );
+        this.handleAudio(payload, this.adpcmHdDecoder, this.hdAudioBuffer, "hdAudio");
         break;
 
       case BinaryOpcode.FFT:
+        this.handleSpectrum(payload, "fft");
+        break;
+
       case BinaryOpcode.SECONDARY_FFT:
+        this.handleSpectrum(payload, "secondaryFft");
         break;
     }
   }
@@ -359,17 +344,10 @@ export class OpenWebRXClient extends EventEmitter {
     let pcm: Int16Array;
 
     if (this.audioCompression === "adpcm") {
-      const uint8 = new Uint8Array(
-        payload.buffer,
-        payload.byteOffset,
-        payload.length
-      );
+      const uint8 = new Uint8Array(payload.buffer, payload.byteOffset, payload.length);
       pcm = decoder.decodeWithSync(uint8);
     } else {
-      const aligned = payload.buffer.slice(
-        payload.byteOffset,
-        payload.byteOffset + payload.length
-      );
+      const aligned = payload.buffer.slice(payload.byteOffset, payload.byteOffset + payload.length);
       pcm = new Int16Array(aligned);
     }
 
@@ -377,5 +355,42 @@ export class OpenWebRXClient extends EventEmitter {
       buffer.write(pcm);
       this.emit(event, pcm);
     }
+  }
+
+  private handleSpectrum(payload: Buffer, event: "fft" | "secondaryFft"): void {
+    const bins = this.decodeSpectrum(payload);
+    if (!bins || bins.length === 0) return;
+
+    const frame: OpenWebRXSpectrumFrame = {
+      bins,
+      fftSize: this.config.fft_size ?? bins.length,
+      centerFreq: this.config.center_freq ?? null,
+      sampleRate: this.config.samp_rate ?? null,
+      compression: this.fftCompression,
+      timestamp: Date.now(),
+    };
+
+    this.emit(event, frame);
+  }
+
+  private decodeSpectrum(payload: Buffer): Float32Array | null {
+    if (this.fftCompression === "none") {
+      const aligned = payload.buffer.slice(payload.byteOffset, payload.byteOffset + payload.length);
+      return new Float32Array(aligned);
+    }
+
+    if (this.fftCompression === "adpcm") {
+      this.adpcmFftDecoder.reset();
+      const uint8 = new Uint8Array(payload.buffer, payload.byteOffset, payload.length);
+      const decoded = this.adpcmFftDecoder.decode(uint8);
+      const decodedLength = Math.max(0, decoded.length - COMPRESS_FFT_PAD_N);
+      const bins = new Float32Array(decodedLength);
+      for (let i = 0; i < decodedLength; i++) {
+        bins[i] = decoded[i + COMPRESS_FFT_PAD_N] / 100;
+      }
+      return bins;
+    }
+
+    return null;
   }
 }

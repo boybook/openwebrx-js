@@ -61,6 +61,15 @@ export interface DspParams {
   dmr_filter?: number;
 }
 
+export interface OpenWebRXSpectrumFrame {
+  bins: Float32Array;
+  fftSize: number | null;
+  centerFreq: number | null;
+  sampleRate: number | null;
+  compression: "adpcm" | "none";
+  timestamp: number;
+}
+
 export type ClientEventMap = {
   connected: [version: string];
   disconnected: [code: number, reason: string];
@@ -70,6 +79,8 @@ export type ClientEventMap = {
   smeter: [level: number];
   audio: [pcmData: Int16Array];
   hdAudio: [pcmData: Int16Array];
+  fft: [frame: OpenWebRXSpectrumFrame];
+  secondaryFft: [frame: OpenWebRXSpectrumFrame];
   receiverDetails: [details: ReceiverDetails];
   log: [message: string];
   error: [error: Error];
