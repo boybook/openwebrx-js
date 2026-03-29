@@ -1,6 +1,6 @@
 {
   "name": "@openwebrx-js/cli",
-  "version": "0.1.2",
+  "version": "0.1.5",
   "description": "OpenWebRX+ interactive CLI client with audio playback",
   "main": "dist/index.js",
   "license": "MIT",

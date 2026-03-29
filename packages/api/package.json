@@ -1,6 +1,6 @@
 {
   "name": "@openwebrx-js/api",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "OpenWebRX+ WebSocket API client library for Node.js",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
