@@ -195,6 +195,28 @@ export class OpenWebRXClient extends EventEmitter {
     return this.profiles;
   }
 
+  /**
+   * Wait until at least one profile is received from the server.
+   * Resolves immediately if profiles are already available.
+   * On timeout, resolves with whatever profiles are available (may be empty).
+   */
+  waitForProfiles(timeoutMs = 3000): Promise<Profile[]> {
+    if (this.profiles.length > 0) {
+      return Promise.resolve(this.profiles);
+    }
+    return new Promise<Profile[]>((resolve) => {
+      const timer = setTimeout(() => {
+        this.off("profiles", handler);
+        resolve(this.profiles);
+      }, timeoutMs);
+      const handler = (profiles: Profile[]) => {
+        clearTimeout(timer);
+        resolve(profiles);
+      };
+      this.once("profiles", handler);
+    });
+  }
+
   getModes(): Mode[] {
     return this.modes;
   }
